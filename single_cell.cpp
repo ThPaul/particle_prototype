@@ -1,3 +1,5 @@
+#include <stdlib.h>
+
 #include "config.hpp"
 #include "all_particles.hpp"
 #include "Cell.hpp"
@@ -15,7 +17,6 @@
 #include <vector>
 
 
-
 template <typename Particle>
 Cell<Particle> setup_cell(int n) {
 	Cell<Particle> cell;
@@ -24,15 +25,20 @@ Cell<Particle> setup_cell(int n) {
 };
 
 
-
 template <typename ParticleVector>
 
-std::vector<Utils::Vector3d> one_with_all_after(const ParticleVector& ParVec ,const int& Startindex){
+std::vector<Utils::Vector3d> one_with_all_after(const ParticleVector& ParVec ,const int& Startindex, const int& Endindex){
 	std::vector<Utils::Vector3d> forces(ParVec.size());
-	auto& FirstElem = ParVec[Startindex];
-	for(int i=Startindex+1;i<ParVec.size();++i){
-		auto force = FirstElem.pos()-ParVec[i].pos();
-		forces[i] += force;
+
+	for(int i=Startindex; i<= Endindex; ++i){
+		// possible to optimize by decreasing size of vector and obmmitting Zeros
+		auto& FirstElemPos = ParVec[i].pos();
+		for(int j=i+1;j<ParVec.size();++j){
+			auto force = FirstElemPos-ParVec[j].pos();
+			forces[i]+=force;
+			forces[j] -= force;
+		}
+
 	}
 	return forces;
 
@@ -46,29 +52,57 @@ void all_with_all(ParticleIterable& particles) {
 	for (auto it = particles.begin(); it!= particles.end(); ++it){
 		particleList.push_back(*it);	
 	}	
-	std::vector<hpx::shared_future<std::vector<Utils::Vector3d>>> futures;
-	futures.reserve(n);
 	for (int i=0; i<n ; ++i){
-		particleList[i].pos()={i,0,0};	}	
-	for (int i=0; i<n ;++i){
+		particleList[i].pos()={double(i),0,0};	}	
+	int NrOfPar = 20;
+	if(NrOfPar>n) NrOfPar=n;
+	int parSize = n / NrOfPar;
+	int NrOfLarger = n % NrOfPar ;
+	auto Index1d = [parSize, NrOfLarger](int par, int i) { return par*parSize + i + ((par<NrOfLarger) ? par : NrOfLarger );};
+/* NOT USED
+	auto Index2d = [parSize, NrOfLarger](int i) {
+		if (i/(parSize+1) < NrOfLarger){
+			std::array result{i/(parSize+1),i%(parSize+1)};
+			return result;
+		}
+		else{
+			int r = i - (parSize+1)*NrOfLarger;
+			std::array result{r/parSize+NrOfLarger,r%parSize};
+			return result;
+		}
+	}; */
 
-		futures.push_back(hpx::async(one_with_all_after<typeof(particleList)>,particleList,i));	
+	/*for (int i=0; i<20; ++i){
+	  int random=rand()%n;
+	  auto b=Index2d(random);
+	  auto c=Index1d(b[0],b[1]);
 
+	  std::cout << n << "NUMBER " << random  << " 2d " << b[0] <<"," << b[1] << " back " << c <<  std::endl;
+
+	  }*/	
+
+	std::vector<hpx::shared_future<std::vector<Utils::Vector3d>>> allPartitionsf;
+	allPartitionsf.reserve(NrOfPar);
+	for (int i=0; i<NrOfPar ; ++i){
+		int start = Index1d(i,0);
+		int end = Index1d(i+1,0)-1;	
+		allPartitionsf.push_back(hpx::async(one_with_all_after<typeof(particleList)>,particleList,start,end));	
 	}
-	for (int i=0; i<n; ++i){
-		Utils::Vector3d sum;
-		sum.fill(0);
-		for (int j=0; j<i; ++j){
-			sum-=futures[j].get()[i];
-		}
-		for (int j=i+1;j<n;++j){
-			sum+=futures[i].get()[j];
-		}
-		particleList[i].force()=sum;
-		if(n==50){
-			std::cout<<i<<" "<<sum[0]<<std::endl; 
+
+	std::vector<Utils::Vector3d> finalForces(n);
+	std::vector<Utils::Vector3d> tempForces(n);
+	for (int i=0; i<allPartitionsf.size(); ++i){
+		tempForces=allPartitionsf[i].get();
+		for (int j=0; j<n; ++j){
+		finalForces[j]+=tempForces[j];
 		}
 	}
+	  for (int i=0; i<n; ++i){
+	   particleList[i].force()=finalForces[i];
+	  if(n==50){
+	  std::cout<<i<<" "<<finalForces[i][0]<<std::endl; 
+	  }
+	  }
 
 }
 
